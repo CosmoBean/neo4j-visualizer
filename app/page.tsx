@@ -1,101 +1,178 @@
-import Image from "next/image";
+// app/page.tsx
+'use client';
 
-export default function Home() {
+import React, { useState } from 'react';
+import QueryEditor from './components/QueryEditor';
+import GraphVisualization from './components/GraphVisualization';
+import ResultsTable from './components/ResultsTable';
+import axios from 'axios';
+
+interface Neo4jNode {
+  identity: string; // Converted to string in API
+  labels: string[];
+  properties: { [key: string]: any };
+}
+
+interface Neo4jRelationship {
+  identity: string; // Converted to string in API
+  type: string;
+  start: string; // Converted to string in API
+  end: string; // Converted to string in API
+  properties: { [key: string]: any };
+}
+
+interface CytoscapeElement {
+  data: {
+    id: string;
+    label?: string;
+    source?: string;
+    target?: string;
+  };
+}
+
+const transformRecordsToElements = (records: any[]): CytoscapeElement[] => {
+  const elements: CytoscapeElement[] = [];
+  const nodeSet = new Set<string>();
+  const edgeSet = new Set<string>();
+
+  records.forEach((record, index) => {
+    const node: Neo4jNode = record['n'];
+    const relationship: Neo4jRelationship = record['r'];
+    const targetNode: Neo4jNode = record['m'];
+
+    // Validate nodes and relationships
+    if (!node || !relationship || !targetNode) {
+      console.warn(`Record at index ${index} is missing 'n', 'r', or 'm':`, record);
+      return; // Skip this record
+    }
+
+    // Source Node
+    const sourceId = node.identity;
+    if (!sourceId || typeof sourceId !== 'string') {
+      console.warn(`Invalid sourceId in record at index ${index}:`, node);
+      return; // Skip this node
+    }
+    if (!nodeSet.has(sourceId)) {
+      elements.push({
+        data: { id: sourceId, label: node.labels[0] || 'Unknown' },
+      });
+      nodeSet.add(sourceId);
+    }
+
+    // Target Node
+    const targetId = targetNode.identity;
+    if (!targetId || typeof targetId !== 'string') {
+      console.warn(`Invalid targetId in record at index ${index}:`, targetNode);
+      return; // Skip this node
+    }
+    if (!nodeSet.has(targetId)) {
+      elements.push({
+        data: { id: targetId, label: targetNode.labels[0] || 'Unknown' },
+      });
+      nodeSet.add(targetId);
+    }
+
+    // Relationship
+    const edgeId = relationship.identity;
+    if (!edgeId || typeof edgeId !== 'string') {
+      console.warn(`Invalid edgeId in record at index ${index}:`, relationship);
+      return; // Skip this relationship
+    }
+    const relationshipType = relationship.type || 'RELATED';
+
+    if (!edgeSet.has(edgeId)) {
+      // Ensure source and target IDs are valid
+      if (!sourceId || !targetId) {
+        console.warn(`Invalid source or target ID for relationship in record at index ${index}:`, relationship);
+        return; // Skip this relationship
+      }
+
+      // Generate a unique edge ID to prevent duplicates
+      const uniqueEdgeId = `${sourceId}-${relationshipType}-${targetId}`;
+
+      elements.push({
+        data: {
+          id: uniqueEdgeId, // Ensure unique IDs
+          source: sourceId,
+          target: targetId,
+          label: relationshipType,
+        },
+      });
+      edgeSet.add(uniqueEdgeId);
+    }
+  });
+
+  return elements;
+};
+
+const HomePage: React.FC = () => {
+  const [query, setQuery] = useState<string>('MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 25');
+  const [records, setRecords] = useState<any[]>([]);
+  const [elements, setElements] = useState<CytoscapeElement[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const executeQuery = async () => {
+    setLoading(true);
+    setError(null);
+    setRecords([]);
+    setElements([]);
+
+    try {
+      const response = await axios.post('/api/query', { query });
+
+      if (response.data.error) {
+        setError(response.data.error);
+      } else {
+        const fetchedRecords = response.data.records;
+        setRecords(fetchedRecords);
+        const transformedElements = transformRecordsToElements(fetchedRecords);
+        console.log('Transformed Elements:', transformedElements); // Debugging
+        setElements(transformedElements);
+      }
+    } catch (err: any) {
+      setError(err.message || 'An error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="https://nextjs.org/icons/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+    <div className="min-h-screen bg-gray-50 p-4">
+      <header className="mb-8">
+        <h1 className="text-3xl font-bold text-center">Neo4j Visualizer</h1>
+      </header>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+      <main className="max-w-4xl mx-auto">
+        <section>
+          <h2 className="text-xl font-semibold mb-2">Cypher Query Editor</h2>
+          <QueryEditor query={query} setQuery={setQuery} />
+          <button
+            onClick={executeQuery}
+            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+            disabled={loading}
           >
-            <Image
-              className="dark:invert"
-              src="https://nextjs.org/icons/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
+            {loading ? 'Executing...' : 'Execute Query'}
+          </button>
+          {error && <p className="mt-2 text-red-600">Error: {error}</p>}
+        </section>
+
+        <section className="mt-8">
+          <h2 className="text-xl font-semibold mb-2">Graph Visualization</h2>
+          {elements.length > 0 ? (
+            <GraphVisualization elements={elements} />
+          ) : (
+            <p>No graph to display. Execute a query to see the visualization.</p>
+          )}
+        </section>
+
+        <section className="mt-8">
+          <h2 className="text-xl font-semibold mb-2">Results Table</h2>
+          {records.length > 0 ? <ResultsTable records={records} /> : <p>No results to display.</p>}
+        </section>
       </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
     </div>
   );
-}
+};
+
+export default HomePage;
